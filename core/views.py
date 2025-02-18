@@ -3,17 +3,19 @@ from django.http import JsonResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Feature, UserInfo
-from .serializers import FeatureSerializer, UserInfoSerializer
 from rest_framework.decorators import api_view
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny, DjangoModelPermissions
 from rest_framework import generics
 from django.utils.decorators import method_decorator
 from django.contrib.auth.decorators import permission_required
+from django.contrib.auth.hashers import make_password
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.models import User, Group
 
+from .models import Feature, UserInfo, Report
+from .serializers import FeatureSerializer, UserInfoSerializer, ReportSerializer
 
-
-
+# ---------------------- Feature API ----------------------
 class FeatureListCreateView(APIView):
     def get(self, request):
         features = Feature.objects.all()
@@ -27,6 +29,7 @@ class FeatureListCreateView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+# ---------------------- User Info API ----------------------
 class UserInfoView(APIView):
     def post(self, request):
         serializer = UserInfoSerializer(data=request.data)
@@ -47,6 +50,7 @@ class UserInfoView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+# ---------------------- Role Checking API ----------------------
 @api_view(['GET'])
 def check_role(request, pk):
     try:
@@ -56,73 +60,62 @@ def check_role(request, pk):
     except UserInfo.DoesNotExist:
         return Response({"error": "UserInfo not found"}, status=404)
 
-
-
+# ---------------------- API Overview ----------------------
 @api_view(['GET'])
 def api_overview(request):
     routes = {
-        '/api/features/': 'List all features',
-        '/api/userinfo/': 'List all user info',
+        'api/features/': 'List all features',
+        'api/userinfo/': 'List all user info',
     }
     return Response(routes)
 
-class AssignRoleView(APIView):
-    permission_classes = [IsAuthenticated]
+# ---------------------- User Registration ----------------------
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
 
-    def put(self, request, pk):
-        try:
-            user = User.objects.get(pk=pk)
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    def post(self, request):
+        username = request.data.get("username")
+        email = request.data.get("email")
+        password = request.data.get("password")
+        role = request.data.get("role", "Manager")  # Default role is Manager
 
-        serializer = UserRoleSerializer(user, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-class SomeOtherView(APIView):
-    def get(self, request):
-        return Response({"message": "This is the response from some_other_view."})
-    
-class UserInfoListCreateView(generics.ListCreateAPIView):
-    queryset = UserInfo.objects.all()
-    serializer_class = UserInfoSerializer
-    class CreateUserView(APIView):
-     def post(self, request):
-        """
-        Admin creates a user and assigns them to a group.
-        """
-        data = request.data
+        if not username or not password:
+            return Response({"error": "Username and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate and create the user
-        serializer = UserInfoSerializer(data=data)
-        if serializer.is_valid():
-            # Create user
-            user = serializer.save()
+        if User.objects.filter(username=username).exists():
+            return Response({"error": "Username already taken"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Assign group to the user
-            role = data.get("role", None)
-            if role:
-                # Check if the group exists; if not, create it
-                group, created = Group.objects.get_or_create(name=role)
-                user.groups.add(group)  # Assign the user to the group
+        user = User.objects.create(
+            username=username,
+            email=email,
+            password=make_password(password)
+        )
 
-            return Response({"message": "User created and assigned to the role."}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Assign user to a group
+        group, created = Group.objects.get_or_create(name=role)
+        user.groups.add(group)  
+
+        # Generate JWT token
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "message": "User registered successfully",
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+            "role": role
+        }, status=status.HTTP_201_CREATED)
+
+# ---------------------- Report Management ----------------------
 class ReportView(APIView):
-    # Decorate the POST method to require 'add_reports' permission
+    permission_classes = [DjangoModelPermissions]
+
     @method_decorator(permission_required("core.add_reports", raise_exception=True))
     def post(self, request):
-        # Add a new report
         data = request.data
         report = Report.objects.create(title=data["title"], content=data["content"])
         return Response({"message": "Report added successfully."}, status=status.HTTP_201_CREATED)
 
-    # Decorate the PUT method to require 'edit_reports' permission
     @method_decorator(permission_required("core.edit_reports", raise_exception=True))
     def put(self, request, pk):
-        
-        # Edit an existing report
         try:
             report = Report.objects.get(pk=pk)
             data = request.data
@@ -132,3 +125,16 @@ class ReportView(APIView):
             return Response({"message": "Report updated successfully."}, status=status.HTTP_200_OK)
         except Report.DoesNotExist:
             return Response({"error": "Report not found."}, status=status.HTTP_404_NOT_FOUND)
+
+# ---------------------- Dashboard API ----------------------
+class DashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            "message": "Welcome to the dashboard!",
+            "username": user.username,
+            "email": user.email,
+            "role": user.groups.first().name if user.groups.exists() else "No Role"
+        }, status=status.HTTP_200_OK)

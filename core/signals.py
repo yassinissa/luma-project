@@ -2,13 +2,24 @@ from django.db.models.signals import post_migrate
 from django.dispatch import receiver
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from core.models import Report  
+from .models import Report
 
 @receiver(post_migrate)
 def create_manager_group(sender, **kwargs):
-    group, created = Group.objects.get_or_create(name="Manager")
-    if created:
-        content_type = ContentType.objects.get_for_model(Report)
-        permissions = Permission.objects.filter(content_type=content_type, codename__in=["add_reports", "edit_reports"])
-        group.permissions.set(permissions)
-        print("Manager group created with permissions.")
+    """
+    Ensures the 'Manager' group is created and has the correct permissions after migrations.
+    """
+    if sender.name == "core":  # ✅ Run only for 'core' app
+        manager_group, created = Group.objects.get_or_create(name="Manager")
+
+        # Get the permissions for Report model
+        report_content_type = ContentType.objects.get_for_model(Report)
+        add_report_permission, _ = Permission.objects.get_or_create(
+            codename="add_reports", content_type=report_content_type, name="Can add reports"
+        )
+        edit_report_permission, _ = Permission.objects.get_or_create(
+            codename="edit_reports", content_type=report_content_type, name="Can edit reports"
+        )
+
+        # Assign permissions to the Manager group
+        manager_group.permissions.add(add_report_permission, edit_report_permission)

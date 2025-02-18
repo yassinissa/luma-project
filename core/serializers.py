@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import Feature, UserInfo
 from django.contrib.auth.models import Group,User
+from .models import Report  # Ensure Report model exists
+
 
 class FeatureSerializer(serializers.ModelSerializer):
     class Meta:
@@ -30,3 +32,7 @@ class UserInfoSerializer(serializers.ModelSerializer):
             user.groups.add(group)
 
         return user_info
+class ReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Report
+        fields = '__all__'  # Or specify the fields you want
